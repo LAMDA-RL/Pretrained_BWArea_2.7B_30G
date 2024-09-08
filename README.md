@@ -34,14 +34,16 @@ model = create_intention_model(
 )      
 ```
 
-### Using Language World Model for Language Generation
+### Use Language World Model for Language Generation
 
 ```python
-examples = "I like eating"
+# The language world model take actions as input and generate the next token.
+# In this example, you can try different actions and see how the language world model generates
+examples = "I like eating" # this is the prompt that is to be understood by the inverse dynamics model
+fixed_action_idx = 2  # choose your action between 0 to 63
 encodes = tokenizer.encode(examples)
 input_ids = torch.LongTensor(encodes).unsqueeze(0)
 attention_mask = torch.ones_like(input_ids)
-fixed_action_idx = 2
 outputs = model(input_ids=input_ids, attention_mask=attention_mask, action_idx=fixed_action_idx)
 logits_next = outputs.logits[:, -1]
 idx = logits_next.argmax(dim=1, keepdim=True)
@@ -49,7 +51,7 @@ output_ids = torch.cat([input_ids, idx], dim=-1).long().squeeze(0)
 examples_out = tokenizer.decode(output_ids)
 print(examples_out, "(fixed action idx = {})".format(fixed_action_idx))
 
-# generation under distinguished actions
+# generation by some different actions. Not that these outputs are not random tokens, but each has a certain semantic meaning.
 
 # <s> I like eating! (fixed action idx = 0)
 # <s> I like eating well (fixed action idx = 1)
@@ -87,7 +89,7 @@ print(examples_out)
 # <s> I like eating fresh
 ```
 
-### Using Inverse Dynamics Model for Language Comprehension
+### Use Inverse Dynamics Model for Language Comprehension
 
 ```python
 examples = "I like eating"
@@ -100,14 +102,16 @@ print(action_idx.shape, action_idx)
 
 # print outputs
 # torch.Size([1, 4]) tensor([[45, 45, 45, 45]])  
-# means that the sentence "I like eating" mainly using action no.45"
+# means that the sentence "I like eating" mainly using action no.45
   
 ```
 
 ### Using Policy Model to Select Actions
 
 ```python
-model.set_action_sampling(greedy=False, temp=2.0)  # greedy=True for determinitic action, temp for temperature of action sampling
+# The policy model was pretrained according to the training data.
+# This example shows the actions of the pre-trained policy
+model.set_action_sampling(greedy=False, temp=2.0)  # greedy=True for deterministic action, temp for temperature of action sampling
 examples = "I like eating"
 encodes = tokenizer.encode(examples)
 input_ids = torch.LongTensor(encodes).unsqueeze(0)
@@ -125,6 +129,7 @@ print(action_index)
 ### Using Policy Model for Selecting Actions and Generating Language with World Model
 
 ```python
+# This example shows the intermediate variable of using the pretrained policy model in the language world model.
 model.set_action_sampling(greedy=False, temp=2.0)  # greedy=True for determinitic action, temp for temperature of action sampling
 examples = "I like eating"
 encodes = tokenizer.encode(examples)
@@ -146,6 +151,7 @@ print(logits.shape, embeddings.shape)
 ### Sentence Generation
 
 ```python
+# This example uses the BWArea as a common LLM for language generation.
 examples = "I like eating"
 encodes = tokenizer.encode(examples)
 input_ids = torch.LongTensor(encodes).unsqueeze(0)
@@ -175,6 +181,7 @@ with torch.no_grad():
 ### A Simple Example of Policy Training (Using Reinforce)
 
 ```python
+# This example trains the policy using your own reward function.
 tokenizer = load_hf_tokenizer(
     "../intention_pretrained_2.7B_30B/",  # model path
     fast_tokenizer=True,
@@ -196,6 +203,8 @@ def mark_only_param_as_trainable(model: nn.Module, bias: str = "none") -> None:
 mark_only_param_as_trainable(model, bias="policy")
 trainable_params = [p for n, p in model.named_parameters() if p.requires_grad]
 optimizer  = torch.optim.AdamW(trainable_params, lr=1e-4)
+
+# define your reward function
 def reward_function(seq):
     return torch.randn(seq.shape[0], 1)
 
