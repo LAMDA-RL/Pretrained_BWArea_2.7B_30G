@@ -4,6 +4,7 @@ This repository provides the pretrained models for the paper "BWArea Model: Lear
 * Language World Model: This model has an action space of 64 actions and generates language based on these actions.
 * Inverse Dynamics Model: This model derives actions from input sentences, essentially "understanding" the language.
 * Policy Model: This model was trained to output actions that simulate the language data used in training.
+
 The BWArea model can simulate a language model by using the inverse dynamics model to understand (i.e., derive actions from) any given prompt, and then generate language by inputting actions from either the inverse dynamics model or the policy model.
 However, the BWArea model is capable of more than just language generation. It is possible to train a custom policy to maximize any reward function, resulting in a task-specific policy model. The reward function can be manually designed, allowing for the creation of policies that accomplish various tasks such as negotiation, persuasion, playing text-based games, and more.
 
