@@ -72,7 +72,7 @@ print(examples_out, "(fixed action idx = {})".format(fixed_action_idx))
 # <s> I like eating car (fixed action idx = 19)
 ```
 
-## or generate under tensor actions:
+#### or generate under tensor actions:
 
 ```python
 fixed_action_idx = torch.randint(0, 64, size=input_ids.shape).long()
