@@ -111,7 +111,7 @@ class IntentionForCausalLM(LlamaForCausalLM):
         self.model.deterministic = greedy
         self.model.action_code_book.set_temp(temp)
 
-    def forward_vqvae(
+    def forward_inverse(
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
@@ -203,6 +203,7 @@ class IntentionForCausalLM(LlamaForCausalLM):
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        action_idx = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalIntentionLMOutputWithPast]:
         r"""
@@ -246,6 +247,7 @@ class IntentionForCausalLM(LlamaForCausalLM):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            action_idx=action_idx,
             return_dict=return_dict,
         )
 
@@ -256,6 +258,81 @@ class IntentionForCausalLM(LlamaForCausalLM):
             logits = torch.cat(logits, dim=-1)
         else:
             logits = self.lm_head(hidden_states)
+        logits = logits.float()
+
+        loss = None
+        if not return_dict:
+            output = (logits,) + outputs
+            return (loss,) + output if loss is not None else output
+
+        return CausalIntentionLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            last_hidden_state=outputs.last_hidden_state,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            action_index=outputs.action_index,
+        )
+    
+    def forward_policy(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, CausalIntentionLMOutputWithPast]:
+        r"""
+        Args:
+            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
+                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
+                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
+
+        Returns:
+
+        Example:
+
+        ```python
+        >>> from transformers import AutoTokenizer, LlamaForCausalLM
+
+        >>> model = LlamaForCausalLM.from_pretrained(PATH_TO_CONVERTED_WEIGHTS)
+        >>> tokenizer = AutoTokenizer.from_pretrained(PATH_TO_CONVERTED_TOKENIZER)
+
+        >>> prompt = "Hey, are you conscious? Can you talk to me?"
+        >>> inputs = tokenizer(prompt, return_tensors="pt")
+
+        >>> # Generate
+        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
+        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
+        ```"""
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        outputs = self.model.forward_policy(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        logits = outputs[0]
         logits = logits.float()
 
         loss = None
@@ -390,8 +467,11 @@ class VQ(nn.Module):
             # embed_ind = Categorical(F.softmax(flatten, dim=-1)).sample()
         # embed_onehot = torch.zeros(embed_ind.shape[0], self.n_embed, device=inputs.device)
         embed_onehot = torch.zeros(embed_ind.shape[0], self.n_embed, device=inputs.device, dtype=self.embed.weight.dtype)
-        if action_idx is not None and action_idx > -1:
+        if action_idx is not None and not isinstance(action_idx, torch.LongTensor) and action_idx > -1:
             embed_onehot[:, action_idx] = 1
+        elif isinstance(action_idx, torch.LongTensor):
+            action_idx = action_idx.reshape(-1)
+            embed_onehot.scatter_(1, action_idx.unsqueeze(1), 1)
         else:
             embed_onehot.scatter_(1, embed_ind.unsqueeze(1), 1)
         # quantize = self.embed(embed_ind.detach())
@@ -695,7 +775,224 @@ class IntentionVQModel(LlamaPreTrainedModel):
             attentions=all_self_attns,
             action_index=action_idx,
         )
+    
+    def forward_policy(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        action_idx=None,
+    ) -> Union[Tuple, IntentionModelOutputWithPast]:
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # retrieve input_ids and inputs_embeds
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            batch_size, seq_length = input_ids.shape[:2]
+        elif inputs_embeds is not None:
+            batch_size, seq_length = inputs_embeds.shape[:2]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        if self.gradient_checkpointing and self.training:
+            if use_cache:
+                print(
+                    "[Warning!]: `use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
+                )
+                use_cache = False
+
+        past_key_values_length = 0
+        past_key_values_policy = None
+        # past_key_values_inverse_dynamics = None
+        past_key_values_transformer = None
+
+        if use_cache:
+            if past_key_values is None:
+                past_key_values = dict(
+                    policy_kv=None,
+                    # inverse_dynamics_kv=None,
+                    # transformer_kv=None,
+                )
+            use_legacy_cache = not isinstance(past_key_values["policy_kv"], Cache)
+            if use_legacy_cache:
+                past_key_values_policy = DynamicCache.from_legacy_cache(past_key_values["policy_kv"])
+                # past_key_values_inverse_dynamics = DynamicCache.from_legacy_cache(past_key_values["inverse_dynamics_kv"])
+                # past_key_values_transformer = DynamicCache.from_legacy_cache(past_key_values["transformer_kv"])
+            else:
+                past_key_values_policy = past_key_values["policy_kv"]
+                # past_key_values_inverse_dynamics = past_key_values["inverse_dynamics_kv"]
+                # past_key_values_transformer = past_key_values["transformer_kv"]
+            past_key_values_length = past_key_values_policy.get_usable_length(seq_length)
+
+        if position_ids is None:
+            device = input_ids.device if input_ids is not None else inputs_embeds.device
+            position_ids = torch.arange(
+                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+            )
+            position_ids = position_ids.unsqueeze(0)
+
+        # decoder layers
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+        next_decoder_cache_policy = None
+        # next_decoder_cache_inverse_dynamic = None
+        # next_decoder_cache_transformer = None
         
+        # inverse dynamics
+        # x_a_inverse = self.transformer_action_enc.wte(input_ids) 
+        # attention_mask_action_inverse = _prepare_4d_causal_attention_mask(
+        #     attention_mask, (batch_size, seq_length), x_a_inverse, past_key_values_length
+        # )
+        # for block_a_inverse in self.transformer_action_enc.h:
+        #     layer_outputs = block_a_inverse(
+        #         x_a_inverse,
+        #         attention_mask=attention_mask_action_inverse,
+        #         position_ids=position_ids,
+        #         past_key_value=past_key_values_inverse_dynamics,
+        #         output_attentions=output_attentions,
+        #         use_cache=use_cache,
+        #     )
+        #     # print(layer_outputs, layer_outputs[0].shape)
+        #     x_a_inverse = layer_outputs[0]
+        #     if use_cache:
+        #         next_decoder_cache_inverse_dynamic = layer_outputs[2 if output_attentions else 1]
+
+        # x_a_inverse = self.transformer_action_enc.ln_f(x_a_inverse)
+        # x_a_inverse[:, :-1] = x_a_inverse[:, 1:].clone()
+        # x_a_inverse = self.press_layer(x_a_inverse)
+        # x_a_inverse, _ = self.action_code_book(x_a_inverse, masks=attention_mask, use_cache=use_cache)
+        # x_a_inverse = self.unpress_layer(x_a_inverse)
+
+        # policy bc
+        x_a_policy = self.transformer_policy.wte(input_ids) 
+        attention_mask_xa = _prepare_4d_causal_attention_mask(
+            attention_mask, (batch_size, seq_length), x_a_policy, past_key_values_length
+        )
+        for block_a_policy in self.transformer_policy.h:
+            layer_outputs = block_a_policy(
+                x_a_policy,
+                attention_mask=attention_mask_xa,
+                position_ids=position_ids,
+                past_key_value=past_key_values_policy,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+            x_a_policy = layer_outputs[0]
+            if use_cache:
+                next_decoder_cache_policy = layer_outputs[2 if output_attentions else 1]
+        
+        x_a_policy = self.transformer_policy.ln_f(x_a_policy)
+        x_a_policy_logits = self.transformer_policy_layer(x_a_policy)
+
+        x_a_policy, action_idx = self.action_code_book.forward_with_idx(
+            x_a_policy_logits, 
+            deterministic=self.deterministic, 
+            epsilon_greedy=self.epsilon_greedy, 
+            action_idx=action_idx
+        )
+        x_a_policy = self.unpress_layer(x_a_policy)
+
+        self.set_action_info(action_idx=action_idx[:, -1:])
+
+        # x = self.transformer.wte(input_ids)
+        # mask = _prepare_4d_causal_attention_mask(
+        #     attention_mask, (batch_size, seq_length), x, past_key_values_length
+        # )
+        # for num_block, block in enumerate(self.transformer.h):
+        #     if num_block == self.enc_layer_num:
+        #         x_a_policy = self.dynamics_norm(self.dynamics_layer(torch.cat([x, x_a_policy], dim=-1)))
+        #         x_policy_s = x_a_policy + x
+
+        #         # x = x_policy_s
+        #         # use_cache to accelerate
+        #         if use_cache:
+        #             x= x_policy_s
+        #         else:
+        #             print("========Use ID ===================")
+        #             x_a_inverse = self.dynamics_norm(self.dynamics_layer(torch.cat([x, x_a_inverse], dim=-1)))
+        #             x_a_inverse_s = x_a_inverse + x
+                    
+        #             x = torch.cat([x_a_inverse_s, x_policy_s], dim=1)  # bs, 2*lens, dim
+        #             # cos = torch.cat([cos, cos], dim=0)  # 2*lens, dim
+        #             # sin = torch.cat([sin, sin], dim=0)  # 2*lens, dim
+        #             if position_ids is not None:
+        #                 position_ids = torch.cat([position_ids, position_ids], dim=-1)  # 2*lens
+                        
+        #             mask_sp = torch.cat([
+        #                     torch.ones((seq_length, seq_length), dtype=torch.bool).tril(), 
+        #                     torch.zeros((seq_length, seq_length), dtype=torch.bool)
+        #                 ],dim=-1
+        #             )
+        #             mask_sp = mask_sp.unsqueeze(0).unsqueeze(0).to(x.device)
+
+        #             mask_sa = torch.cat([
+        #                 (torch.ones((seq_length, seq_length)).tril() - torch.eye(seq_length)).bool(), 
+        #                 torch.eye(seq_length, dtype=torch.bool)
+        #                 ], dim=-1
+        #             )
+        #             mask_sa = mask_sa.unsqueeze(0).unsqueeze(0).to(x.device)
+        #             mask = torch.cat([mask_sp, mask_sa], dim=2)
+                    
+        #             if attention_mask is not None:
+        #                 mask = mask.repeat(attention_mask.shape[0], 1, 1, 1)
+        #                 pad_mask_ = torch.cat([attention_mask, attention_mask], dim=1)
+        #                 mask = mask.permute(0, 1, 3, 2)
+        #                 mask[pad_mask_.unsqueeze(1) == 0] = False
+        #                 mask[:, :, torch.arange(seq_length * 2), torch.arange(seq_length * 2)] = True
+        #                 mask = mask.permute(0, 1, 3, 2)
+                    
+        #     layer_outputs = block(
+        #         x,
+        #         attention_mask=mask,
+        #         position_ids=position_ids,
+        #         past_key_value=past_key_values_transformer,
+        #         output_attentions=output_attentions,
+        #         use_cache=use_cache,
+        #     )
+        #     x = layer_outputs[0]
+        #     if use_cache:
+        #         next_decoder_cache_transformer = layer_outputs[2 if output_attentions else 1]
+        
+        # if not use_cache:
+        #     x = x[:, seq_length:]
+        # x = self.transformer.ln_f(x)
+
+        if use_cache:
+            next_cache_policy = next_decoder_cache_policy.to_legacy_cache() if use_legacy_cache else next_decoder_cache_policy
+            # next_cache_inverse_dynamic = next_decoder_cache_inverse_dynamic.to_legacy_cache() if use_legacy_cache else next_decoder_cache_inverse_dynamic
+            # next_cache_transformer = next_decoder_cache_transformer.to_legacy_cache() if use_legacy_cache else next_decoder_cache_transformer
+
+            next_cache = dict(
+                policy_kv=next_cache_policy,
+                # inverse_dynamics_kv=next_cache_inverse_dynamic,
+                # transformer_kv=next_cache_transformer,
+            )
+        else:
+            next_cache = None
+
+        if not return_dict:
+            return tuple(v for v in [x_a_policy_logits, next_cache, all_hidden_states, all_self_attns, action_idx] if v is not None)
+        return IntentionModelOutputWithPast(
+            last_hidden_state=x_a_policy_logits,
+            past_key_values=next_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attns,
+            action_index=action_idx,
+        )
+
     def forward_vqvae(
         self,
         input_ids: torch.LongTensor = None,
@@ -762,7 +1059,7 @@ class IntentionVQModel(LlamaPreTrainedModel):
             x_a_inverse = layer_outputs[0]
 
         x_a_inverse = self.transformer_action_enc.ln_f(x_a_inverse)
-        x_a_inverse[:, :-1] = x_a_inverse[:, 1:]
+        x_a_inverse[:, :-1] = x_a_inverse[:, 1:].clone()
         x_a_inverse = self.press_layer(x_a_inverse)
         x_a_inverse, action_index = self.action_code_book(x_a_inverse, masks=attention_mask)
         x_a_inverse = self.unpress_layer(x_a_inverse)
