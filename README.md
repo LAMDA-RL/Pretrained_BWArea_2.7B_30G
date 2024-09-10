@@ -8,11 +8,15 @@ This repository provides the pretrained models for the paper "BWArea Model: Lear
 The BWArea model can simulate a language model by using the inverse dynamics model to understand (i.e., derive actions from) any given prompt, and then generate language by inputting actions from either the inverse dynamics model or the policy model.
 However, the BWArea model is capable of more than just language generation. It is possible to train a custom policy to maximize any reward function, resulting in a task-specific policy model. The reward function can be manually designed, allowing for the creation of policies that accomplish various tasks such as negotiation, persuasion, playing text-based games, and more.
 
-### Install
+## Install
 
 ```
 pip install -r requirements.txt
 ```
+
+## Usage
+
+BWArea Model contains three parts: Lanugage World Model (1.1B), Inverse Dynamics Model (0.5B) and Policy Model (1.1B), 2.7B in total. Each module can be utilized seperately or combined for distinguished objective.
 
 ### Loading Model and Tokenizer
 
@@ -106,7 +110,7 @@ print(action_idx.shape, action_idx)
   
 ```
 
-### Using Policy Model to Select Actions
+### Use Policy Model to Select Actions
 
 ```python
 # The policy model was pretrained according to the training data.
@@ -126,7 +130,7 @@ action_index = outputs.action_index[:, -1]
 print(action_index)
 ```
 
-### Using Policy Model for Selecting Actions and Generating Language with World Model
+### Use Policy Model for Generating Language with World Model
 
 ```python
 # This example shows the intermediate variable of using the pretrained policy model in the language world model.
@@ -177,6 +181,9 @@ with torch.no_grad():
 
 # I like eating something soothing and helping to tone my body and
 ```
+## Policy Model Training
+
+Since BWArea model treats the language generation as a decision tasks on the language world model and a certain reward (human intention or specific tasks), one of the advantage of BWArea Model is that we can only optimize the policy model to align a certain human intention or tasks.
 
 ### A Simple Example of Policy Training (Using Reinforce)
 
@@ -254,7 +261,7 @@ loss.backward()
 optimizer.step()
 ```
 
-### Acknowledgements
+## Acknowledgements
 
 - (https://github.com/microsoft/DeepSpeedExamples/tree/master/applications/DeepSpeed-Chat)
 
